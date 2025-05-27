@@ -28,7 +28,11 @@ struct WgpuStuff<const W: usize, const H: usize> {
 	instance: wgpu::Instance,
 	device: wgpu::Device,
 	queue: wgpu::Queue,
-	input_buf: wgpu::Buffer
+	input_buf: wgpu::Buffer,
+	output_buf: wgpu::Buffer,
+	encoder: wgpu::CommandEncoder,
+	pipeline: wgpu::ComputePipeline,
+	bind_group: wgpu::BindGroup
 }
 
 impl<const W: usize, const H: usize> WgpuStuff<W, H> {
@@ -45,22 +49,63 @@ impl<const W: usize, const H: usize> WgpuStuff<W, H> {
 			required_features: wgpu::Features::empty(),
 			required_limits: wgpu::Limits::default(),
 			memory_hints: wgpu::MemoryHints::Performance,
-			label: None,
+			label: Some("device"),
 			trace: wgpu::Trace::Off
 		}).await.unwrap();
 
 		let input_buf = device.create_buffer(&wgpu::BufferDescriptor {
-			label: None,
+			label: Some("input_buf"),
 			size: (H * W) as u64,
-			usage: wgpu::BufferUsages::COPY_SRC,
+			usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::STORAGE,
 			mapped_at_creation: false
+		});
+
+		let output_buf = device.create_buffer(&wgpu::BufferDescriptor {
+			label: Some("output_buf"),
+			size: (H * W) as u64,
+			usage: wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::STORAGE,
+			mapped_at_creation: false
+		});
+
+		let shader = device.create_shader_module(wgpu::include_wgsl!("shader.wgsl"));
+
+		let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+			label: None,
+			layout: None,
+			module: &shader,
+			entry_point: Some("gol"),
+			compilation_options: wgpu::PipelineCompilationOptions::default(),
+			cache: None
+		});
+
+		let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+			label: Some("bind_group"),
+			layout: &pipeline.get_bind_group_layout(0),
+			entries: &[
+				wgpu::BindGroupEntry {
+					binding: 0,
+					resource: input_buf.as_entire_binding()
+				},
+				wgpu::BindGroupEntry {
+					binding: 1,
+					resource: output_buf.as_entire_binding()
+				}
+			]
+		});
+
+		let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+			label: Some("encoder")
 		});
 
 		Self {
 			instance,
 			device,
 			queue,
-			input_buf
+			input_buf,
+			output_buf,
+			encoder,
+			pipeline,
+			bind_group
 		}
 	}
 }
