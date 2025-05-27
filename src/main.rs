@@ -17,10 +17,10 @@ const GAME_HEIGHT: usize = 30;
 
 fn main() {
 	let game = GameState::<GAME_WIDTH, GAME_HEIGHT>::default();
-	let gpu = WgpuStuff::<GAME_WIDTH, GAME_HEIGHT>::new().block_on();
+	let mut gpu = WgpuStuff::<GAME_WIDTH, GAME_HEIGHT>::new().block_on();
 
 	// TODO: print before
-	let next_game = game.next_state(&gpu).block_on();
+	let next_game = game.next_state(&mut gpu).block_on();
 	// TODO: print after
 }
 
@@ -55,14 +55,14 @@ impl<const W: usize, const H: usize> WgpuStuff<W, H> {
 
 		let input_buf = device.create_buffer(&wgpu::BufferDescriptor {
 			label: Some("input_buf"),
-			size: (H * W) as u64,
+			size: (H * W * 4) as u64,
 			usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::STORAGE,
 			mapped_at_creation: false
 		});
 
 		let output_buf = device.create_buffer(&wgpu::BufferDescriptor {
 			label: Some("output_buf"),
-			size: (H * W) as u64,
+			size: (H * W * 4) as u64,
 			usage: wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::STORAGE,
 			mapped_at_creation: false
 		});
@@ -111,7 +111,26 @@ impl<const W: usize, const H: usize> WgpuStuff<W, H> {
 }
 
 impl<const W: usize, const H: usize> GameState<W, H> {
-	async fn next_state(&self, gpu: &WgpuStuff<W, H>) -> Self {
+	fn serialize(&self) -> Vec<u8> {
+		self.cells.iter().flat_map(|row| {
+			row.iter().map(|cell| match cell {
+				false => 0u32,
+				true => 1u32
+			}).flat_map(u32::to_ne_bytes)
+		}).collect()
+	}
+
+	async fn next_state(&self, gpu: &mut WgpuStuff<W, H>) -> Self {
+		gpu.queue.write_buffer(&gpu.input_buf, 0, &self.serialize());
+
+		let mut compute_pass = gpu.encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+			label: Some("gol_compute"),
+			timestamp_writes: None
+		});
+		compute_pass.set_pipeline(&gpu.pipeline);
+		compute_pass.set_bind_group(0, &gpu.bind_group, &[]);
+		compute_pass.dispatch_workgroups((W * H) as u32, 1, 1);
+
 		todo!()
 	}
 }
