@@ -17,9 +17,9 @@ const GAME_HEIGHT: usize = 30;
 
 fn main() {
 	let mut game = GameState::<GAME_WIDTH, GAME_HEIGHT>::default();
-	game.cells[0][0] = true;
-	game.cells[0][1] = true;
-	game.cells[0][2] = true;
+	game.cells[2][2] = true;
+	game.cells[2][3] = true;
+	game.cells[2][4] = true;
 	let mut gpu = WgpuStuff::<GAME_WIDTH, GAME_HEIGHT>::new().block_on();
 
 	// TODO: print before
