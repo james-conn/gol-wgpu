@@ -16,7 +16,10 @@ const GAME_WIDTH: usize = 30;
 const GAME_HEIGHT: usize = 30;
 
 fn main() {
-	let game = GameState::<GAME_WIDTH, GAME_HEIGHT>::default();
+	let mut game = GameState::<GAME_WIDTH, GAME_HEIGHT>::default();
+	game.cells[0][0] = true;
+	game.cells[0][1] = true;
+	game.cells[0][2] = true;
 	let mut gpu = WgpuStuff::<GAME_WIDTH, GAME_HEIGHT>::new().block_on();
 
 	// TODO: print before
@@ -30,7 +33,6 @@ struct WgpuStuff<const W: usize, const H: usize> {
 	queue: wgpu::Queue,
 	input_buf: wgpu::Buffer,
 	output_buf: wgpu::Buffer,
-	encoder: wgpu::CommandEncoder,
 	pipeline: wgpu::ComputePipeline,
 	bind_group: wgpu::BindGroup
 }
@@ -63,15 +65,51 @@ impl<const W: usize, const H: usize> WgpuStuff<W, H> {
 		let output_buf = device.create_buffer(&wgpu::BufferDescriptor {
 			label: Some("output_buf"),
 			size: (H * W * 4) as u64,
-			usage: wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::STORAGE,
+			usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
 			mapped_at_creation: false
 		});
 
 		let shader = device.create_shader_module(wgpu::include_wgsl!("shader.wgsl"));
 
+		let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+			label: Some("bind_group_layout"),
+			entries: &[
+				wgpu::BindGroupLayoutEntry {
+					binding: 0,
+					visibility: wgpu::ShaderStages::COMPUTE,
+					ty: wgpu::BindingType::Buffer {
+						ty: wgpu::BufferBindingType::Storage {
+							read_only: true
+						},
+						has_dynamic_offset: false,
+						min_binding_size: None
+					},
+					count: None
+				},
+				wgpu::BindGroupLayoutEntry {
+					binding: 1,
+					visibility: wgpu::ShaderStages::COMPUTE,
+					ty: wgpu::BindingType::Buffer {
+						ty: wgpu::BufferBindingType::Storage {
+							read_only: false
+						},
+						has_dynamic_offset: false,
+						min_binding_size: None
+					},
+					count: None
+				}
+			]
+		});
+
+		let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+			label: Some("gol_pipeline_layout"),
+			bind_group_layouts: &[&bind_group_layout],
+			push_constant_ranges: &[]
+		});
+
 		let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-			label: None,
-			layout: None,
+			label: Some("gol_pipeline"),
+			layout: Some(&pipeline_layout),
 			module: &shader,
 			entry_point: Some("gol"),
 			compilation_options: wgpu::PipelineCompilationOptions::default(),
@@ -80,7 +118,7 @@ impl<const W: usize, const H: usize> WgpuStuff<W, H> {
 
 		let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
 			label: Some("bind_group"),
-			layout: &pipeline.get_bind_group_layout(0),
+			layout: &bind_group_layout,
 			entries: &[
 				wgpu::BindGroupEntry {
 					binding: 0,
@@ -93,17 +131,12 @@ impl<const W: usize, const H: usize> WgpuStuff<W, H> {
 			]
 		});
 
-		let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-			label: Some("encoder")
-		});
-
 		Self {
 			instance,
 			device,
 			queue,
 			input_buf,
 			output_buf,
-			encoder,
 			pipeline,
 			bind_group
 		}
@@ -121,15 +154,41 @@ impl<const W: usize, const H: usize> GameState<W, H> {
 	}
 
 	async fn next_state(&self, gpu: &mut WgpuStuff<W, H>) -> Self {
+		let mut encoder = gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+			label: Some("encoder")
+		});
+
 		gpu.queue.write_buffer(&gpu.input_buf, 0, &self.serialize());
 
-		let mut compute_pass = gpu.encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+		let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
 			label: Some("gol_compute"),
 			timestamp_writes: None
 		});
 		compute_pass.set_pipeline(&gpu.pipeline);
 		compute_pass.set_bind_group(0, &gpu.bind_group, &[]);
 		compute_pass.dispatch_workgroups((W * H) as u32, 1, 1);
+		drop(compute_pass);
+
+		let map_buf = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+			label: Some("map_buf"),
+			size: (H * W * 4) as u64,
+			usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+			mapped_at_creation: false
+		});
+
+		encoder.copy_buffer_to_buffer(
+			&gpu.output_buf, 0,
+			&map_buf, 0,
+			(H * W * 4) as u64
+		);
+
+		gpu.queue.submit(std::iter::once(encoder.finish()));
+
+		map_buf.map_async(wgpu::MapMode::Read, .., |r| r.unwrap());
+		gpu.device.poll(wgpu::PollType::Wait).unwrap();
+
+		let serialized_data = map_buf.get_mapped_range(..);
+		println!("{:?}", serialized_data.as_ref());
 
 		todo!()
 	}
