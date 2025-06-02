@@ -12,8 +12,27 @@ impl<const W: usize, const H: usize> Default for GameState<W, H> {
 	}
 }
 
-const GAME_WIDTH: usize = 30;
-const GAME_HEIGHT: usize = 30;
+// yes, this is somewhat inefficient
+impl<const W: usize, const H: usize> std::fmt::Display for GameState<W, H> {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+		for yi in 0..H {
+			for xi in 0..W {
+				if self.cells[yi][xi] {
+					write!(f, "#")?;
+				} else {
+					write!(f, ".")?;
+				}
+			}
+
+			writeln!(f)?;
+		}
+
+		Ok(())
+	}
+}
+
+const GAME_WIDTH: usize = 50;
+const GAME_HEIGHT: usize = 20;
 
 fn main() {
 	let mut game = GameState::<GAME_WIDTH, GAME_HEIGHT>::default();
@@ -22,19 +41,20 @@ fn main() {
 	game.cells[2][4] = true;
 	let mut gpu = WgpuStuff::<GAME_WIDTH, GAME_HEIGHT>::new().block_on();
 
-	// TODO: print before
+	println!("{game}");
 	let next_game = game.next_state(&mut gpu).block_on();
-	// TODO: print after
+	println!("{next_game}");
 }
 
 struct WgpuStuff<const W: usize, const H: usize> {
-	instance: wgpu::Instance,
 	device: wgpu::Device,
 	queue: wgpu::Queue,
 	input_buf: wgpu::Buffer,
 	output_buf: wgpu::Buffer,
 	pipeline: wgpu::ComputePipeline,
-	bind_group: wgpu::BindGroup
+	bind_group: wgpu::BindGroup,
+	width_uniform: wgpu::Buffer,
+	height_uniform: wgpu::Buffer
 }
 
 impl<const W: usize, const H: usize> WgpuStuff<W, H> {
@@ -69,11 +89,26 @@ impl<const W: usize, const H: usize> WgpuStuff<W, H> {
 			mapped_at_creation: false
 		});
 
+		let width_uniform = device.create_buffer(&wgpu::BufferDescriptor {
+			label: Some("width_uniform"),
+			size: 4,
+			usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+			mapped_at_creation: false
+		});
+
+		let height_uniform = device.create_buffer(&wgpu::BufferDescriptor {
+			label: Some("height_uniform"),
+			size: 4,
+			usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+			mapped_at_creation: false
+		});
+
 		let shader = device.create_shader_module(wgpu::include_wgsl!("shader.wgsl"));
 
 		let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
 			label: Some("bind_group_layout"),
 			entries: &[
+				// input_buf
 				wgpu::BindGroupLayoutEntry {
 					binding: 0,
 					visibility: wgpu::ShaderStages::COMPUTE,
@@ -86,6 +121,7 @@ impl<const W: usize, const H: usize> WgpuStuff<W, H> {
 					},
 					count: None
 				},
+				// output_buf
 				wgpu::BindGroupLayoutEntry {
 					binding: 1,
 					visibility: wgpu::ShaderStages::COMPUTE,
@@ -93,6 +129,28 @@ impl<const W: usize, const H: usize> WgpuStuff<W, H> {
 						ty: wgpu::BufferBindingType::Storage {
 							read_only: false
 						},
+						has_dynamic_offset: false,
+						min_binding_size: None
+					},
+					count: None
+				},
+				// width
+				wgpu::BindGroupLayoutEntry {
+					binding: 2,
+					visibility: wgpu::ShaderStages::COMPUTE,
+					ty: wgpu::BindingType::Buffer {
+						ty: wgpu::BufferBindingType::Uniform,
+						has_dynamic_offset: false,
+						min_binding_size: None
+					},
+					count: None
+				},
+				// height
+				wgpu::BindGroupLayoutEntry {
+					binding: 3,
+					visibility: wgpu::ShaderStages::COMPUTE,
+					ty: wgpu::BindingType::Buffer {
+						ty: wgpu::BufferBindingType::Uniform,
 						has_dynamic_offset: false,
 						min_binding_size: None
 					},
@@ -127,18 +185,27 @@ impl<const W: usize, const H: usize> WgpuStuff<W, H> {
 				wgpu::BindGroupEntry {
 					binding: 1,
 					resource: output_buf.as_entire_binding()
+				},
+				wgpu::BindGroupEntry {
+					binding: 2,
+					resource: width_uniform.as_entire_binding()
+				},
+				wgpu::BindGroupEntry {
+					binding: 3,
+					resource: height_uniform.as_entire_binding()
 				}
 			]
 		});
 
 		Self {
-			instance,
 			device,
 			queue,
 			input_buf,
 			output_buf,
 			pipeline,
-			bind_group
+			bind_group,
+			width_uniform,
+			height_uniform
 		}
 	}
 }
@@ -153,12 +220,30 @@ impl<const W: usize, const H: usize> GameState<W, H> {
 		}).collect()
 	}
 
+	fn deserialize(serialized: &[u8]) -> Self {
+		let cells = <[[bool; W]; H]>::try_from(serialized.chunks(W * 4).map(|row| {
+			<[bool; W]>::try_from(row.chunks(4).map(|cell| {
+				let cell: [u8; 4] = cell.try_into().unwrap();
+				let n = u32::from_ne_bytes(cell);
+				match n {
+					0 => false,
+					1 => true,
+					n => panic!("gpu returned invalid integer {n}")
+				}
+			}).collect::<Vec<bool>>()).unwrap()
+		}).collect::<Vec<[bool; W]>>()).unwrap();
+
+		Self { cells }
+	}
+
 	async fn next_state(&self, gpu: &mut WgpuStuff<W, H>) -> Self {
 		let mut encoder = gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
 			label: Some("encoder")
 		});
 
 		gpu.queue.write_buffer(&gpu.input_buf, 0, &self.serialize());
+		gpu.queue.write_buffer(&gpu.width_uniform, 0, &(W as u32).to_ne_bytes());
+		gpu.queue.write_buffer(&gpu.height_uniform, 0, &(H as u32).to_ne_bytes());
 
 		let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
 			label: Some("gol_compute"),
@@ -188,8 +273,6 @@ impl<const W: usize, const H: usize> GameState<W, H> {
 		gpu.device.poll(wgpu::PollType::Wait).unwrap();
 
 		let serialized_data = map_buf.get_mapped_range(..);
-		println!("{:?}", serialized_data.as_ref());
-
-		todo!()
+		Self::deserialize(&serialized_data)
 	}
 }
