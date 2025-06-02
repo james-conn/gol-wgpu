@@ -214,6 +214,13 @@ impl<const W: usize, const H: usize> WgpuStuff<W, H> {
 	}
 }
 
+fn int_div_round_up(divisor: u32, dividend: u32) -> u32 {
+	(divisor / dividend) + match divisor % dividend {
+		0 => 0,
+		_ => 1
+	}
+}
+
 impl<const W: usize, const H: usize> GameState<W, H> {
 	fn serialize(&self) -> Vec<u8> {
 		self.cells.iter().flat_map(|row| {
@@ -255,7 +262,11 @@ impl<const W: usize, const H: usize> GameState<W, H> {
 		});
 		compute_pass.set_pipeline(&gpu.pipeline);
 		compute_pass.set_bind_group(0, &gpu.bind_group, &[]);
-		compute_pass.dispatch_workgroups((W * H) as u32, 1, 1);
+		compute_pass.dispatch_workgroups(
+			int_div_round_up(W as u32, 16),
+			int_div_round_up(H as u32, 16),
+			1
+		);
 		drop(compute_pass);
 
 		let map_buf = gpu.device.create_buffer(&wgpu::BufferDescriptor {

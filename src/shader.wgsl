@@ -3,13 +3,6 @@
 @group(0) @binding(2) var<uniform> width: u32;
 @group(0) @binding(3) var<uniform> height: u32;
 
-fn from_idx(i: u32) -> vec2<u32> {
-	return vec2(
-		i % width,
-		i / width
-	);
-}
-
 fn get_index(x: u32, y: u32) -> u32 {
 	return (y * width + x);
 }
@@ -32,25 +25,25 @@ fn get_neighbor_count(x: u32, y: u32) -> u32 {
 	return count;
 }
 
-@compute @workgroup_size(1)
+@compute @workgroup_size(16, 16, 1)
 fn gol(@builtin(global_invocation_id) global_id: vec3<u32>) {
-	let xy = from_idx(global_id.x);
-	let x = xy.x;
-	let y = xy.y;
+	let x = global_id.x;
+	let y = global_id.y;
 
 	if (
 		x == 0 ||
 		y == 0 ||
-		x == width - 1 ||
-		y == height - 1
+		x >= width - 1 ||
+		y >= height - 1
 	) {
 		return;
 	}
 
-	let cell: u32 = input_buf[global_id.x];
+	let idx = get_index(x, y);
+	let cell: u32 = input_buf[idx];
 	let neighbors = get_neighbor_count(x, y);
 
-	output_buf[global_id.x] = select(0u, 1u,
+	output_buf[idx] = select(0u, 1u,
 		(
 			cell == 1u &&
 			neighbors >= 2 &&
