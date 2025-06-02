@@ -36,14 +36,18 @@ const GAME_HEIGHT: usize = 20;
 
 fn main() {
 	let mut game = GameState::<GAME_WIDTH, GAME_HEIGHT>::default();
-	game.cells[2][2] = true;
-	game.cells[2][3] = true;
-	game.cells[2][4] = true;
 	let mut gpu = WgpuStuff::<GAME_WIDTH, GAME_HEIGHT>::new().block_on();
 
-	println!("{game}");
-	let next_game = game.next_state(&mut gpu).block_on();
-	println!("{next_game}");
+	// initial state
+	for y in 6..=13 {
+		game.cells[y][24] = true;
+	}
+
+	loop {
+		println!("{game}");
+		game = game.next_state(&mut gpu).block_on();
+		std::thread::sleep(std::time::Duration::from_millis(50));
+	}
 }
 
 struct WgpuStuff<const W: usize, const H: usize> {

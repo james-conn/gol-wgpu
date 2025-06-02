@@ -19,13 +19,13 @@ fn get_neighbor_count(x: u32, y: u32) -> u32 {
 
 	for (var dy = -1; dy <= 1; dy++){
 		for (var dx = -1; dx <= 1; dx++) {
-			if (dx == 0 && dy == 0) { continue; }
-
 			var new_x = i32(x) + dx;
 			var new_y = i32(y) + dy;
 
 			let index = get_index(u32(new_x), u32(new_y));
-			count += select(0u, 1u, input_buf[index] == 1u);
+			count += select(0u, 1u,
+				(dx != 0 || dy != 0) &&
+				input_buf[index] == 1u);
 		}
 	}
 
@@ -49,17 +49,15 @@ fn gol(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
 	let cell: u32 = input_buf[global_id.x];
 	let neighbors = get_neighbor_count(x, y);
-	var next_cell: u32 = 0u;
 
-	if (
-		cell == 1u &&
-		neighbors >= 2 &&
-		neighbors <= 3
-	) {
-		next_cell = 1u;
-	} else if (cell == 0u && neighbors == 3) {
-		next_cell = 1u;
-	}
-
-	output_buf[global_id.x] = next_cell;
+	output_buf[global_id.x] = select(0u, 1u,
+		(
+			cell == 1u &&
+			neighbors >= 2 &&
+			neighbors <= 3
+		) || (
+			cell == 0u &&
+			neighbors == 3
+		)
+	);
 }
