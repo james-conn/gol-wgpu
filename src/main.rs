@@ -31,7 +31,7 @@ impl<const W: usize, const H: usize> std::fmt::Display for GameState<W, H> {
 	}
 }
 
-const GAME_WIDTH: usize = 50;
+const GAME_WIDTH: usize = 19;
 const GAME_HEIGHT: usize = 20;
 
 fn main() {
@@ -40,7 +40,7 @@ fn main() {
 
 	// initial state
 	for y in 6..=13 {
-		game.cells[y][24] = true;
+		game.cells[y][9] = true;
 	}
 
 	loop {
